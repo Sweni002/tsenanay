@@ -1,0 +1,27 @@
+# Flutter
+**/build/
+**/.dart_tool/
+**/.idea/
+**/.vscode/
+**/ios/Flutter/Flutter.framework/
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Pods/
+**/ios/Runner.xcworkspace/
+**/ios/Runner.xcodeproj/project.xcworkspace/
+**/pubspec.lock
+
+# Python / Flask
+__pycache__/
+*.pyc
+env/
+venv/
+instance/
+*.sqlite
+*.db
+*.log
+
+# OS, editors
+.DS_Store
+Thumbs.db
+*.swp
