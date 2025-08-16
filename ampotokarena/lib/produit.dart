@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'creer_produit.dart';
 import 'dioClient.dart';
+import 'package:dio/dio.dart';
+import 'socket_service.dart';
 
 class ProduitPage extends StatefulWidget {
   const ProduitPage({Key? key}) : super(key: key);
@@ -11,6 +13,8 @@ class ProduitPage extends StatefulWidget {
 
 class _ProduitPageState extends State<ProduitPage> {
   final DioClient dioClient = DioClient();
+  final SocketService socketService = SocketService();
+
 
   bool _isLoading = true;
   String? _error;
@@ -25,6 +29,28 @@ class _ProduitPageState extends State<ProduitPage> {
   List<Map<String, dynamic>> _produitsFiltres = [];
 
   final TextEditingController _searchController = TextEditingController();
+void _handleDioError(BuildContext context, dynamic error) {
+  if (error is DioError) {
+    if (error.type == DioErrorType.connectionError || 
+        error.type == DioErrorType.connectionTimeout) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Erreur de connexion")),
+      );
+    } else if (error.response != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Erreur serveur: ${error.response?.statusCode}")),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Erreur: ${error.message}")),
+      );
+    }
+  } else {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Erreur inconnue")),
+    );
+  }
+}
 
   // Pour gérer la sélection multiple
   final Set<Map<String, dynamic>> _produitsSelectionnes = {};
@@ -37,10 +63,29 @@ class _ProduitPageState extends State<ProduitPage> {
     _searchController.addListener(() {
       _filtrerProduits(_searchController.text);
     });
+      socketService.initSocket();
+
+    // 🔹 Écouter quand un produit est ajouté
+    socketService.onProduitAjoute((data) {
+      print("📢 Produit ajouté reçu: $data");
+      _fetchProduits(); // recharger depuis l'API
+    });
+     socketService.socket.on('produit_modifie', (data) {
+    print("✏️ Produit modifié: $data");
+    _fetchProduits();
+  });
+
+  // 🔹 Quand un produit est supprimé
+  socketService.socket.on('produit_supprime', (data) {
+    print("🗑 Produit supprimé: $data");
+    _fetchProduits();
+  });
   }
 
   @override
   void dispose() {
+     socketService.dispose();
+
     _searchController.dispose();
     super.dispose();
   }
@@ -56,37 +101,38 @@ class _ProduitPageState extends State<ProduitPage> {
     }
   }
 
-  Future<void> _supprimerProduitBackend(int idproduit) async {
-    try {
-      await dioClient.deleteProduit(idproduit);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Suppression terminée")),
-      );
-      await _fetchProduits();
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Erreur du connexion")),
-      );
-    }
+ Future<void> _supprimerProduitBackend(int idproduit) async {
+  try {
+    await dioClient.deleteProduit(idproduit);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Suppression terminée")),
+    );
+    await _fetchProduits();
+  } catch (e) {
+    _handleDioError(context, e);
+  }
+}
+
+Future<void> _fetchProduits() async {
+  setState(() {
+    _isLoading = true;
+    _error = null;
+  });
+
+  try {
+    final data = await dioClient.getProduits();
+    _produits = List<Map<String, dynamic>>.from(data);
+    _filtrerProduits(_searchController.text);
+  } catch (e) {
+    _handleDioError(context, e);
+    _error = e.toString();
   }
 
-  Future<void> _fetchProduits() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-    try {
-      final data = await dioClient.getProduits();
-      _produits = List<Map<String, dynamic>>.from(data);
-      // Appliquer la recherche après mise à jour des produits
-      _filtrerProduits(_searchController.text);
-    } catch (e) {
-      _error = e.toString();
-    }
-    setState(() {
-      _isLoading = false;
-    });
-  }
+  setState(() {
+    _isLoading = false;
+  });
+}
+
 
   void _filtrerProduits(String query) {
     if (query.isEmpty) {
@@ -106,116 +152,151 @@ class _ProduitPageState extends State<ProduitPage> {
     }
   }
 
-  void _afficherBottomSheet(int index) {
-    final produit = _produitsFiltres[index];
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      backgroundColor: Colors.white,
-      isScrollControlled: true,
-      elevation: 8,
-      builder: (context) {
-        return Padding(
-          padding: MediaQuery.of(context).viewInsets +
-              const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
-          child: Wrap(
-            children: [
-              Center(
-                child: Container(
-                  width: 50,
-                  height: 6,
-                  margin: const EdgeInsets.only(bottom: 28),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade400,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+ void _afficherBottomSheet(int index) {
+  final produit = _produitsFiltres[index];
+  showModalBottomSheet(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    backgroundColor: Colors.white,
+    isScrollControlled: true,
+    elevation: 8,
+    builder: (context) {
+      return Padding(
+        padding: MediaQuery.of(context).viewInsets +
+            const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+        child: Wrap(
+          children: [
+            Center(
+              child: Container(
+                width: 50,
+                height: 6,
+                margin: const EdgeInsets.only(bottom: 28),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade400,
+                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              Text(
-                produit["nom"],
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 24),
-              _infoRow(Icons.storage, "Quantité", produit["qte"].toString()),
-              const SizedBox(height: 12),
-              _infoRow(Icons.price_check, "Prix", "${produit["prix"]} Ar"),
-              const SizedBox(height: 12),
-              _infoRow(Icons.monetization_on, "Bénéfice", "${produit["benefice"]} Ar"),
-              const Divider(height: 40, thickness: 1.5),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepOrangeAccent,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+            ),
+     Center(
+  child: Text(
+    produit["nom"],
+    style: const TextStyle(
+      fontSize: 23,
+      fontWeight: FontWeight.bold,
+      letterSpacing: 1,
+      color: Colors.black87,
+    ),
+  ),
+),
+        const SizedBox(height: 30),
+
+            // Tableau des infos
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _infoCell("Quantité", produit["qte"].toString()),
+                _infoCell("Prix", "${produit["prix"]} Ar"),
+                _infoCell("Bénéfice", "${produit["benefice"]} Ar"),
+              ],
+            ),
+
+            const Divider(height: 40, thickness: 1.5),
+
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.deepOrangeAccent,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 5,
+                    ),
+                    label: const Text(
+                      "Modifier",
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                    ),
+                    onPressed: () async {
+                      final result = await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => CreerProduitPage(produit: produit),
                         ),
-                        elevation: 5,
-                      ),
-                      icon: const Icon(Icons.edit, size: 24),
-                      label: const Text(
-                        "Modifier",
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                      ),
-                      onPressed: () async {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => CreerProduitPage(produit: produit),
-                          ),
+                      );
+                      if (result == true) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("Modification réussie")),
                         );
-                        if (result == true) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Modification réussie")),
-                          );
-                          await _fetchProduits();
-                          Navigator.pop(context);
-                        }
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 20),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.redAccent,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 5,
-                      ),
-                      icon: const Icon(Icons.delete, size: 24),
-                      label: const Text(
-                        "Supprimer",
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                      ),
-                      onPressed: () async {
+                        await _fetchProduits();
                         Navigator.pop(context);
-                        final id = produit['idproduit'];
-                        await _supprimerProduitBackend(id);
-                      },
-                    ),
+                      }
+                    },
                   ),
-                ],
-              ),
-              const SizedBox(height: 28),
-            ],
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.redAccent,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 5,
+                    ),
+                    label: const Text(
+                      "Supprimer",
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                    ),
+                    onPressed: () async {
+                      Navigator.pop(context);
+                      final id = produit['idproduit'];
+                      await _supprimerProduitBackend(id);
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 28),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+// Cellule du tableau
+Widget _infoCell(String label, String value) {
+  return Expanded(
+    child: Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+            color: Colors.grey,
           ),
-        );
-      },
-    );
-  }
+        ),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _infoRow(IconData icon, String label, String value) {
     return Row(
@@ -370,7 +451,9 @@ class _ProduitPageState extends State<ProduitPage> {
                             fontSize: 18,
                           ),
                         ),
-                        subtitle: Text(
+                        subtitle:
+                        
+                        Text(
                           "Prix: ${produit["prix"]} Ar",
                           style: TextStyle(
                             fontSize: 14,

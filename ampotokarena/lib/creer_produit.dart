@@ -15,7 +15,7 @@ class _CreerProduitPageState extends State<CreerProduitPage> {
   late TextEditingController _nomController;
   late TextEditingController _prixController;
   late TextEditingController _beneficeController;
-  int _qte = 1;
+  int _qte = 0;
 
   bool _loading = false; // pour indiquer qu'on attend la réponse
 
@@ -31,7 +31,7 @@ class _CreerProduitPageState extends State<CreerProduitPage> {
     _beneficeController = TextEditingController(
       text: widget.produit?["benefice"]?.toString() ?? "",
     );
-    _qte = widget.produit?["qte"] ?? 1;
+    _qte = widget.produit?["qte"] ?? 0;
   }
 
   @override
@@ -214,8 +214,13 @@ class _CreerProduitPageState extends State<CreerProduitPage> {
 
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(7),
+        
+      ),
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         backgroundColor: Colors.blue,
+                        foregroundColor: const Color.fromARGB(255, 219, 219, 219)
                       ),
                       icon: const Icon(Icons.save),
                       label: Text(

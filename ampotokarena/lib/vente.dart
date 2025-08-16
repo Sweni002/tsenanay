@@ -1,57 +1,259 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
+import 'creer_produit.dart';
+import 'dioClient.dart';
 import 'venteProduit.dart';
+import 'package:intl/intl.dart'; // ⚡ Pour formater la date
+import 'package:table_calendar/table_calendar.dart'; // ⚡ nouveau package
+import 'package:intl/date_symbol_data_local.dart';
+import 'FilterByDateRangePage.dart';
+import 'package:dio/dio.dart';
+
 class VentePage extends StatefulWidget {
   const VentePage({Key? key}) : super(key: key);
 
   @override
-  State<VentePage> createState() => _VentePageState();
+  State<VentePage> createState() => _VenteState();
 }
 
+class _VenteState extends State<VentePage> {
+  final DioClient dioClient = DioClient();
+ DateTime _selectedDate = DateTime.now(); // Date initiale
+DateTime? _filterStart;
+DateTime? _filterEnd;
 
-class _VentePageState extends State<VentePage> {
-  final DateFormat _dateFormat = DateFormat('yyyy-MM-dd');
+  bool _isLoading = true;
+  String? _error;
+final Set<Map<String, dynamic>> _ventesSelectionnees = {};
 
-  // Simule liste des produits avec quantité dispo
   List<Map<String, dynamic>> _produits = [
-    {"nom": "Pomme", "qte": 10},
-    {"nom": "Banane", "qte": 20},
-    {"nom": "Orange", "qte": 15},
-    {"nom": "Mangue", "qte": 8},
+    {"idproduit": 1, "nom": "Pomme", "qte": 10, "prix": 1500, "benefice": 500},
+    {"idproduit": 2, "nom": "Banane", "qte": 20, "prix": 1200, "benefice": 300},
+    {"idproduit": 3, "nom": "Orange", "qte": 15, "prix": 1000, "benefice": 200},
+    {"idproduit": 4, "nom": "Mangue", "qte": 8, "prix": 2500, "benefice": 600},
   ];
 
-  // Liste des ventes effectuées
-  List<Map<String, dynamic>> _ventes = [
-    {
-      "nom": "Pomme",
-      "qte": 3,
-      "prix": 1500,
-      "date": DateTime(2025, 8, 1),
+  List<Map<String, dynamic>> _produitsFiltres = [];
+
+  final TextEditingController _searchController = TextEditingController();
+
+  // Pour gérer la sélection multiple
+  final Set<Map<String, dynamic>> _produitsSelectionnes = {};
+  List<Map<String, dynamic>> _ventes = [];
+
+ Future<void> _fetchVentesParDate(DateTime date) async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final dateStr = DateFormat('yyyy-MM-dd').format(date);
+      final data = await dioClient.getFilteredVentes(dateStr); // ⚡ Méthode à créer dans DioClient
+      final ventes = List<Map<String, dynamic>>.from(data);
+
+      setState(() {
+        _ventes = ventes;
+        _ventesFiltres = ventes;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Erreur du connexion")));
+ 
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+Future<void> _selectDate(BuildContext context) async {
+  await showDialog(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        content: SizedBox(
+          width: 300,
+          height: 350,
+          child: CalendarDatePicker(
+            initialDate: _selectedDate,
+            firstDate: DateTime(2020),
+            lastDate: DateTime(2100),
+            onDateChanged: (date) {
+              setState(() {
+                _selectedDate = date;
+                _filterStart = date;
+                _filterEnd = date;
+              });
+              _fetchVentesParDate(date);
+              Navigator.of(context).pop();
+            },
+          ),
+        ),
+      );
     },
-    {
-      "nom": "Banane",
-      "qte": 5,
-      "prix": 1200,
-      "date": DateTime(2025, 8, 5),
-    },
-  ];
+  );
+}
+
+  Future<void> _fetchVentes() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final data = await dioClient.getVentes();
+      final ventes = List<Map<String, dynamic>>.from(data);
+
+      setState(() {
+        _ventes = ventes; // 🔹 garde la liste complète
+        _ventesFiltres = ventes; // 🔹 liste affichée (filtrée ou non)
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+Future<void> _supprimerVentesBackend() async {
+  if (_ventesSelectionnees.isEmpty) return;
+
+  final confirm = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text("Confirmer la suppression"),
+      content: Text(
+        "Voulez-vous vraiment supprimer ${_ventesSelectionnees.length} vente${_ventesSelectionnees.length > 1 ? 's' : ''} ?",
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text("Annuler"),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text("Supprimer"),
+        ),
+      ],
+    ),
+  );
+
+  if (confirm != true) return;
+
+  for (final vente in _ventesSelectionnees) {
+    try {
+  final message = await dioClient.deleteVente(vente['idvente']);
+       ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text(message)),
+); // ⚡ méthode à créer
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Erreur: $e")),
+      );
+    }
+  }
+
+  setState(() {
+    _ventesSelectionnees.clear();
+  });
+
+  await _fetchVentesParDate(_selectedDate); // 🔹 refresh
+}
 
   List<Map<String, dynamic>> _ventesFiltres = [];
-  final TextEditingController _searchController = TextEditingController();
-  DateTime? _dateDebut;
-  DateTime? _dateFin;
-DateTime? _dateUnique;
 
-  bool _isDoingVente = false;
+  void _filtrerVentes(String query) {
+    if (query.isEmpty) {
+      setState(() {
+        _ventesFiltres = List.from(_ventes);
+      });
+    } else {
+      setState(() {
+        _ventesFiltres = _ventes.where((vente) {
+          return vente['nom_produit'].toString().toLowerCase().contains(
+            query.toLowerCase(),
+          );
+        }).toList();
+      });
+    }
+  }
+Future<void> _selectDateRange(BuildContext context) async {
+  DateTimeRange? picked = await showDateRangePicker(
+    context: context,
+    firstDate: DateTime(2020),
+    lastDate: DateTime(2100),
+    locale: const Locale('fr', 'FR'),
+    initialDateRange: DateTimeRange(
+      start: _selectedDate,
+      end: _selectedDate,
+    ),
+  );
+
+  if (picked != null) {
+    setState(() {
+      _selectedDate = picked.start; // optionnel : mettre à jour la date initiale
+    });
+
+    try {
+      final data = await dioClient.getVentesRange(
+        picked.start,
+        picked.end,
+      ); // ⚡ méthode à créer dans DioClient
+      setState(() {
+        _ventes = List<Map<String, dynamic>>.from(data);
+        _ventesFiltres = _ventes;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Erreur: $e")),
+      );
+    }
+  }
+}
 
   @override
   void initState() {
     super.initState();
-    _ventesFiltres = List.from(_ventes);
-    _searchController.addListener(_filtrerVentes);
+    
+    _fetchProduits();
+    _fetchVentesParDate(_selectedDate); // charger les ventes du jour initial
+  // ⚡ Initialiser la locale française pour les dates
+  initializeDateFormatting('fr_FR', null).then((_) {
+    setState(() {}); // forcer rebuild si nécessaire
+  });
+    _searchController.addListener(() {
+      _filtrerVentes(_searchController.text);
+    });
+  }
+
+  void _faireVente(
+    Map<String, dynamic> produit,
+    int qte,
+    double prixUnitaire,
+  ) async {
+    try {
+      final venteData = {
+        "idproduit": produit['idproduit'],
+        "qte": qte,
+        "prix": prixUnitaire,
+        "date": DateTime.now().toIso8601String(),
+      };
+
+      await dioClient.addVente(venteData);
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Vente enregistrée")));
+
+      await _fetchProduits(); // mise à jour des produits
+      await _fetchVentesParDate(_selectedDate); // ✅ seulement les ventes du jour sélectionné
+   } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Erreur: $e")));
+    }
   }
 
   @override
@@ -59,706 +261,426 @@ DateTime? _dateUnique;
     _searchController.dispose();
     super.dispose();
   }
+void _handleDioError(BuildContext context, dynamic error) {
+  // Supprimer le dernier SnackBar s'il y en a un
+  ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
-  void _filtrerVentes() {
-    final query = _searchController.text.toLowerCase();
-    setState(() {
-      _ventesFiltres = _ventes.where((vente) {
-        final matchesNom = vente['nom'].toString().toLowerCase().contains(query);
-        bool matchesDate = true;
-        if (_dateDebut != null) {
-          matchesDate = vente['date'].isAfter(_dateDebut!.subtract(const Duration(days: 1)));
-        }
-        if (_dateFin != null) {
-          matchesDate = matchesDate && vente['date'].isBefore(_dateFin!.add(const Duration(days: 1)));
-        }
-        return matchesNom && matchesDate;
-      }).toList();
-    });
+  String message = "Erreur inconnue";
+
+  if (error is DioError) {
+    if (error.type == DioErrorType.connectionError || 
+        error.type == DioErrorType.connectionTimeout) {
+      message = "Erreur de connexion";
+    } else if (error.response != null) {
+      message = "Erreur serveur: ${error.response?.statusCode}";
+    } else {
+      message = "Erreur: ${error.message}";
+    }
+  } else {
+    message = error.toString();
   }
-Future<void> _selectUniqueDate(BuildContext context) async {
-  final picked = await showDatePicker(
-    context: context,
-    initialDate: _dateUnique ?? DateTime.now(),
-    firstDate: DateTime(2020),
-    lastDate: DateTime(2100),
-    helpText: "Sélectionner une date",
+
+  // Afficher un seul SnackBar à la fois
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text(message)),
   );
-  if (picked != null) {
-    setState(() {
-      _dateUnique = picked;
-      _ventesFiltres = _ventes.where((vente) {
-        return _dateFormat.format(vente['date']) ==
-               _dateFormat.format(_dateUnique!);
-      }).toList();
-    });
-  }
 }
 
-  Future<void> _selectDate(BuildContext context, bool isDebut) async {
-    final initialDate = isDebut ? (_dateDebut ?? DateTime.now()) : (_dateFin ?? DateTime.now());
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initialDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2100),
-      helpText: isDebut ? "Sélectionner la date de début" : "Sélectionner la date de fin",
-    );
-    if (picked != null) {
-      setState(() {
-        if (isDebut) {
-          _dateDebut = picked;
-          if (_dateFin != null && _dateFin!.isBefore(_dateDebut!)) {
-            _dateFin = _dateDebut;
-          }
-        } else {
-          _dateFin = picked;
-          if (_dateDebut != null && _dateFin!.isBefore(_dateDebut!)) {
-            _dateDebut = _dateFin;
-          }
-        }
-      });
-      _filtrerVentes();
-    }
-  }
-
-  Future<void> _exportCsv() async {
-    if (_dateDebut == null || _dateFin == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Veuillez sélectionner une période complète")),
-      );
-      return;
-    }
-
-    List<List<String>> csvData = [
-      ["Nom", "Quantité", "Prix Unitaire (Ar)", "Prix Total (Ar)", "Date"],
-      ..._ventesFiltres.map((vente) => [
-            vente['nom'].toString(),
-            vente['qte'].toString(),
-            vente['prix'].toString(),
-            (vente['qte'] * vente['prix']).toString(),
-            _dateFormat.format(vente['date']),
-          ]),
-    ];
-
-    final csv = const ListToCsvConverter().convert(csvData);
-
+  Future<void> _supprimerProduitBackend(int idproduit) async {
     try {
-      final directory = await getApplicationDocumentsDirectory();
-      final path =
-          '${directory.path}/ventes_export_${_dateFormat.format(_dateDebut!)}_to_${_dateFormat.format(_dateFin!)}.csv';
-      final file = File(path);
-      await file.writeAsString(csv);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Export réussi : $path")),
-      );
-
-      await Share.shareXFiles([XFile(path)], text: 'Voici le fichier CSV exporté');
+      await dioClient.deleteProduit(idproduit);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Suppression terminée")));
+      await _fetchProduits();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Erreur lors de l'export : $e")),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Erreur du connexion")));
     }
   }
 
-  void _faireVenteSurProduit(Map<String, dynamic> produit) {
-    setState(() {
-      _isDoingVente = true;
-    });
-
-    showModalBottomSheet(
-      isScrollControlled: true,
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-              left: 20,
-              right: 20,
-              top: 20),
-          child: _VenteSurProduitSheet(
-            produit: produit,
-            onVenteConfirmee: (qteVendue, prixUnitaire) {
-              setState(() {
-                _ventes.add({
-                  "nom": produit['nom'],
-                  "qte": qteVendue,
-                  "prix": prixUnitaire,
-                  "date": DateTime.now(),
-                });
-
-                int indexProd = _produits.indexWhere((p) => p['nom'] == produit['nom']);
-                if (indexProd != -1) {
-                  _produits[indexProd]['qte'] -= qteVendue;
-                  if (_produits[indexProd]['qte'] < 0) {
-                    _produits[indexProd]['qte'] = 0;
-                  }
-                }
-
-                _filtrerVentes();
-              });
-              Navigator.pop(context);
-            },
-          ),
-        );
-      },
-    ).whenComplete(() {
+  Future<void> _fetchProduits() async {
+    try {
+      final data = await dioClient.getProduits();
       setState(() {
-        _isDoingVente = false;
+        _produits = List<Map<String, dynamic>>.from(data);
+        _produitsFiltres = List.from(_produits);
+        _filtrerProduits(
+          _searchController.text,
+        ); // 🔹 directement mettre à jour la liste filtrée
       });
-    });
+    } catch (e) {
+       ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Erreur du connexion")));
+ 
+
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
-  void _showAddVenteDialog() {
-    showModalBottomSheet(
-      isScrollControlled: true,
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-              left: 20,
-              right: 20,
-              top: 20),
-          child: _AddVenteManuelleSheet(
-            onAjouter: (vente) {
-              setState(() {
-                _ventes.add(vente);
-                _filtrerVentes();
-              });
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  // Fonction pour supprimer une vente avec confirmation
-  Future<bool?> _confirmDelete(BuildContext context, Map<String, dynamic> vente) {
-    return showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text("Confirmer la suppression"),
-          content: Text("Voulez-vous vraiment supprimer la vente de ${vente['nom']} ?"),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text("Annuler"),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text("Supprimer"),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            ),
-          ],
-        );
-      },
-    );
+  void _filtrerProduits(String query) {
+    if (query.isEmpty) {
+      setState(() {
+        _produitsFiltres = List.from(_produits);
+      });
+    } else {
+      setState(() {
+        _produitsFiltres = _produits
+            .where(
+              (prod) => prod["nom"].toString().toLowerCase().contains(
+                query.toLowerCase(),
+              ),
+            )
+            .toList();
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool selectionActive = _produitsSelectionnes.isNotEmpty;
+
     return Scaffold(
-      body: SafeArea(
+ appBar: AppBar(
+  title: _ventesSelectionnees.isNotEmpty
+      ? Text("${_ventesSelectionnees.length} sélectionnée${_ventesSelectionnees.length > 1 ? 's' : ''}")
+      : InkWell(
+          onTap: () => _selectDate(context),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.calendar_month_outlined, color: Colors.teal),
+              const SizedBox(width: 5),
+              Text(
+                (_filterStart != null && _filterEnd != null)
+                    ? (_filterStart == _filterEnd
+                        ? DateFormat('dd MMM yyyy', 'fr_FR').format(_filterStart!)
+                        : "${DateFormat('dd MMM yyyy', 'fr_FR').format(_filterStart!)} → ${DateFormat('dd MMM yyyy', 'fr_FR').format(_filterEnd!)}")
+                    : DateFormat('dd MMM yyyy', 'fr_FR').format(_selectedDate),
+                style: const TextStyle(
+                  fontSize: 18,
+                  color: Colors.teal,
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+          ),
+        ),
+  leading: null,
+  actions: [
+    if (_ventesSelectionnees.isNotEmpty) ...[
+      IconButton(
+        icon: const Icon(Icons.delete),
+        onPressed: _supprimerVentesBackend,
+        tooltip: "Supprimer la sélection",
+      ),
+      IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: () {
+          setState(() {
+            _ventesSelectionnees.clear();
+          });
+        },
+        tooltip: "Annuler la sélection",
+      ),
+    ],
+    // le menu "trier entre deux dates"
+    PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, color: Colors.teal),
+      onSelected: (value) async {
+        if (value == 'trier') {
+          final result = await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const FilterByDateRangePage(),
+            ),
+          );
+
+          if (result != null) {
+            _filterStart = result['startDate'] as DateTime;
+            _filterEnd = result['endDate'] as DateTime;
+
+            try {
+              final data = await dioClient.getVentesRange(_filterStart!, _filterEnd!);
+              setState(() {
+                _ventes = List<Map<String, dynamic>>.from(data);
+                _ventesFiltres = _ventes;
+              });
+            } catch (e) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text("Erreur lors du filtrage: $e")),
+              );
+            }
+          }
+        }
+      },
+      itemBuilder: (BuildContext context) => [
+        const PopupMenuItem<String>(
+          value: 'trier',
+          child: Text("Trier entre deux dates"),
+        ),
+      ],
+    ),
+  ],
+)
+,    body: SafeArea(
         child: Column(
           children: [
-            // Recherche
             Padding(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(12.0),
               child: TextField(
                 controller: _searchController,
                 decoration: InputDecoration(
+                  hintText: "Rechercher un produit...",
                   prefixIcon: const Icon(Icons.search),
-                  hintText: 'Rechercher un produit vendu',
-                     border: OutlineInputBorder(
+                  border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(5),
-                    ),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
               ),
             ),
+            if (_isLoading)
+              const Expanded(child: Center(child: CircularProgressIndicator()))
+            else if (_error != null)
+              Expanded(
+                child: Center(
+                  child: Text(
+                    "Erreur: $_error",
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                ),
+              )
+            else if (_produitsFiltres.isEmpty)
+              const Expanded(
+                child: Center(
+                  child: Text(
+                    "Aucun produit trouvé",
+                    style: TextStyle(fontSize: 18, color: Colors.grey),
+                  ),
+                ),
+              )
+            else
+  Expanded(
+  child: ListView.builder(
+    itemCount: _ventesFiltres.length,
+    itemBuilder: (context, index) {
+      final vente = _ventesFiltres[index];
+      final isSelected = _ventesSelectionnees.contains(vente);
 
-            // Filtre dates
-    // Filtre dates (période et date unique)
-Padding(
-  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    return AnimatedContainer(
+  duration: const Duration(milliseconds: 250),
+  curve: Curves.easeInOut,
+  child: Card(
+    color: isSelected ? Colors.teal.withOpacity(0.15) : Colors.white,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+      side: isSelected
+          ? BorderSide(color: Colors.teal, width: 2)
+          : BorderSide.none,
+    ),
+    elevation: isSelected ? 6 : 4,
+    margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    child: InkWell(
+      onLongPress: () {
+        setState(() {
+          if (isSelected) {
+            _ventesSelectionnees.remove(vente);
+          } else {
+            _ventesSelectionnees.add(vente);
+          }
+        });
+      },
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.teal : Colors.teal.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                Icons.sell,
+                color: isSelected ? Colors.white : Colors.teal,
+              ),
+            ),
+            if (isSelected)
+              const Positioned(
+                right: -6,
+                top: -6,
+                child: Icon(
+                  Icons.check_circle,
+                  color: Colors.teal,
+                  size: 20,
+                ),
+              ),
+          ],
+        ),
+        title: Text(
+          vente['nom_produit'],
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+            color: isSelected ? Colors.teal.shade900 : Colors.black,
+          ),
+        ),
+        subtitle: Text(
+          "Prix: ${vente['prix']} Ar",
+          style: const TextStyle(fontSize: 14, color: Colors.grey),
+        ),
+        children: [
+   Container(
+  width: double.infinity,
+  decoration: BoxDecoration(
+    color: Colors.teal.shade50.withOpacity(0.2),
+    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+  ),
+  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
   child: Row(
     children: [
+      // 📦 Carte Quantité
       Expanded(
-        child: OutlinedButton.icon(
-          icon: const Icon(Icons.date_range),
-          label: Text(_dateDebut == null
-              ? 'Date début'
-              : _dateFormat.format(_dateDebut!)),
-          onPressed: () => _selectDate(context, true),
+        child: Container(
+          height: 110,
+          decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.orange.withOpacity(0.1),
+                blurRadius: 6,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.orange,
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(10),
+                child: const Icon(
+                  Icons.inventory_2,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "${vente['qte']}",
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              const Text(
+                "Qté",
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+            ],
+          ),
         ),
       ),
-      const SizedBox(width: 12),
+
+      const SizedBox(width: 10),
+
+      // 📅 Carte Date
       Expanded(
-        child: OutlinedButton.icon(
-          icon: const Icon(Icons.date_range),
-          label: Text(_dateFin == null
-              ? 'Date fin'
-              : _dateFormat.format(_dateFin!)),
-          onPressed: () => _selectDate(context, false),
+        child: Container(
+          height: 110,
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.blue.withOpacity(0.1),
+                blurRadius: 6,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.blue,
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(10),
+                child: const Icon(
+                  Icons.calendar_today,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                DateFormat('dd MMM yyyy', 'fr_FR')
+                    .format(DateTime.parse(vente['date'])),
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const Text(
+                "Date",
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+            ],
+          ),
         ),
       ),
     ],
   ),
-),
-Padding(
-  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-  child: OutlinedButton.icon(
-    icon: const Icon(Icons.calendar_today),
-    label: Text(_dateUnique == null
-        ? 'Filtrer par date unique'
-        : _dateFormat.format(_dateUnique!)),
-    onPressed: () => _selectUniqueDate(context),
-  ),
-),
-// Bouton Export (visible seulement si 2 dates choisies)
-if (_dateDebut != null && _dateFin != null)
-  Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-    child: ElevatedButton.icon(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.teal.shade700,
-        minimumSize: const Size.fromHeight(46),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
-        elevation: 4,
+)
+   ],
       ),
-      icon: const Icon(Icons.download),
-      label: const Text(
-        'Exporter les ventes (période)',
-        style: TextStyle(color: Colors.white),
-      ),
-      onPressed: _exportCsv,
     ),
   ),
-
-            // Bouton Export
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal.shade700,
-                  minimumSize: const Size.fromHeight(46),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 4,
-                ),
-                icon: const Icon(Icons.download),
-                label: const Text('Exporter les ventes', style: TextStyle(color: Colors.white)),
-                onPressed: _exportCsv,
-              ),
-            ),
-
-            const Divider(height: 1),
-
-            // Liste des ventes avec Dismissible
-            Expanded(
-              child: _ventesFiltres.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'Aucune vente trouvée',
-                        style: TextStyle(fontSize: 18, color: Colors.grey),
-                      ),
-                    )
-                  : ListView.separated(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      itemCount: _ventesFiltres.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final vente = _ventesFiltres[index];
-                        return Dismissible(
-                          key: UniqueKey(),
-                          background: Container(
-                            color: Colors.red,
-                            alignment: Alignment.centerLeft,
-                            padding: const EdgeInsets.only(left: 20),
-                            child: const Icon(Icons.delete, color: Colors.white),
-                          ),
-                          secondaryBackground: Container(
-                            color: Colors.red,
-                            alignment: Alignment.centerRight,
-                            padding: const EdgeInsets.only(right: 20),
-                            child: const Icon(Icons.delete, color: Colors.white),
-                          ),
-                          confirmDismiss: (direction) => _confirmDelete(context, vente),
-                          onDismissed: (direction) {
-                            setState(() {
-                              // Supprime de la liste principale et filtrée
-                              _ventes.remove(vente);
-                              _filtrerVentes();
-
-                              // Facultatif : remettre la qté dans stock si le produit est dans la liste
-                              final indexProd = _produits.indexWhere((p) => p['nom'] == vente['nom']);
-                              if (indexProd != -1) {
-                                _produits[indexProd]['qte'] += vente['qte'];
-                              }
-                            });
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text("Vente supprimée")),
-                            );
-                          },
-                          child: ListTile(
-                            contentPadding:
-                                const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                            leading: CircleAvatar(
-                              backgroundColor: Colors.teal.shade100,
-                              child: const Icon(Icons.sell, color: Colors.teal),
-                            ),
-                            title: Text(
-                              vente['nom'],
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 18),
-                            ),
-                            subtitle: Text(
-                              "Quantité: ${vente['qte']} • Prix unitaire: ${vente['prix']} Ar\nDate: ${_dateFormat.format(vente['date'])}",
-                              style:
-                                  TextStyle(fontSize: 14, color: Colors.grey.shade700),
-                            ),
-                            trailing: Text(
-                              "${vente['qte'] * vente['prix']} Ar",
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                  color: Colors.teal),
-                            ),
-                            onTap: () {
-                              final produit = _produits.firstWhere(
-                                  (p) => p['nom'] == vente['nom'],
-                                  orElse: () => {});
-                              if (produit.isNotEmpty) {
-                                _faireVenteSurProduit(produit);
-                              }
-                            },
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
+);
+   },
+  ),
+)
+     ],
         ),
       ),
-  floatingActionButton: FloatingActionButton(
-  backgroundColor: Colors.teal,
-  onPressed: () {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => VendrePage(
-          produits: _produits,
-          onFaireVente: (produit) {
-            _faireVenteSurProduit(produit);
-          },
-        ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: Colors.teal,
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => VendrePage(
+                produits: _produits, // ⚡ ajouter ceci
+                fetchProduits: _fetchProduits,
+                onFaireVente: _faireVente,
+                onRefreshProduit: _fetchProduits,
+                onRefreshVente: _fetchVentes,
+                getProduits: () =>
+                    _produits, // ⚡ ton callback pour récupérer la liste
+              ),
+            ),
+          );
+        },
+        child: const Icon(Icons.add),
       ),
     );
-  },
-  child: const Icon(Icons.add),
-),
-    );
-  }
-}
-
-// Widget bottom sheet pour vente sur un produit existant
-class _VenteSurProduitSheet extends StatefulWidget {
-  final Map<String, dynamic> produit;
-  final Function(int qteVendue, int prixUnitaire) onVenteConfirmee;
-
-  const _VenteSurProduitSheet({
-    Key? key,
-    required this.produit,
-    required this.onVenteConfirmee,
-  }) : super(key: key);
-
-  @override
-  State<_VenteSurProduitSheet> createState() => _VenteSurProduitSheetState();
-}
-
-class _VenteSurProduitSheetState extends State<_VenteSurProduitSheet> {
-  final _formKey = GlobalKey<FormState>();
-  final qteVendueController = TextEditingController();
-  final prixController = TextEditingController();
-
-  @override
-  void dispose() {
-    qteVendueController.dispose();
-    prixController.dispose();
-    super.dispose();
-  }
-
-  void _valider() {
-    if (_formKey.currentState!.validate()) {
-      final qteVendue = int.parse(qteVendueController.text);
-      final prix = int.parse(prixController.text);
-      widget.onVenteConfirmee(qteVendue, prix);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 5,
-              margin: const EdgeInsets.only(bottom: 20),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade400,
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-            Text(
-              "Vente de ${widget.produit['nom']}",
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 20),
-
-            TextFormField(
-              initialValue: widget.produit['qte'].toString(),
-              decoration: const InputDecoration(
-                labelText: "Quantité actuelle",
-                border: OutlineInputBorder(),
-              ),
-              readOnly: true,
-            ),
-            const SizedBox(height: 12),
-
-            TextFormField(
-              controller: qteVendueController,
-              decoration: const InputDecoration(
-                labelText: "Quantité vendue",
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.number,
-              validator: (val) {
-                if (val == null || val.trim().isEmpty) {
-                  return "Entrez la quantité vendue";
-                }
-                final qte = int.tryParse(val);
-                if (qte == null || qte <= 0) {
-                  return "Quantité invalide";
-                }
-                if (qte > widget.produit['qte']) {
-                  return "Quantité vendue > quantité disponible";
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 12),
-
-            TextFormField(
-              controller: prixController,
-              decoration: const InputDecoration(
-                labelText: "Prix unitaire (Ar)",
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.number,
-              validator: (val) {
-                if (val == null || val.trim().isEmpty) {
-                  return "Entrez le prix unitaire";
-                }
-                final prix = int.tryParse(val);
-                if (prix == null || prix <= 0) {
-                  return "Prix invalide";
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 20),
-
-            ElevatedButton(
-              onPressed: _valider,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.teal.shade700,
-                foregroundColor: Colors.white,
-                minimumSize: const Size.fromHeight(46),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              child: const Text(
-                "Valider la vente",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-            ),
-            const SizedBox(height: 24),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// Widget bottom sheet pour ajouter une vente manuelle (produit libre)
-class _AddVenteManuelleSheet extends StatefulWidget {
-  final Function(Map<String, dynamic>) onAjouter;
-
-  const _AddVenteManuelleSheet({Key? key, required this.onAjouter})
-      : super(key: key);
-
-  @override
-  State<_AddVenteManuelleSheet> createState() => _AddVenteManuelleSheetState();
-}
-
-class _AddVenteManuelleSheetState extends State<_AddVenteManuelleSheet> {
-  final _formKey = GlobalKey<FormState>();
-  final nomController = TextEditingController();
-  final qteController = TextEditingController();
-  final prixController = TextEditingController();
-
-  @override
-  void dispose() {
-    nomController.dispose();
-    qteController.dispose();
-    prixController.dispose();
-    super.dispose();
-  }
-
-  void _valider() {
-    if (_formKey.currentState!.validate()) {
-      widget.onAjouter({
-        "nom": nomController.text.trim(),
-        "qte": int.parse(qteController.text),
-        "prix": int.parse(prixController.text),
-        "date": DateTime.now(),
-      });
-      Navigator.pop(context);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 5,
-              margin: const EdgeInsets.only(bottom: 20),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade400,
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-            const Text(
-              "Ajouter une vente manuelle",
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 20),
-
-            TextFormField(
-              controller: nomController,
-              decoration: const InputDecoration(
-                labelText: "Nom du produit",
-                border: OutlineInputBorder(),
-              ),
-              validator: (val) {
-                if (val == null || val.trim().isEmpty) {
-                  return "Entrez le nom du produit";
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 12),
-
-            TextFormField(
-              controller: qteController,
-              decoration: const InputDecoration(
-                labelText: "Quantité",
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.number,
-              validator: (val) {
-                if (val == null || val.trim().isEmpty) {
-                  return "Entrez la quantité";
-                }
-                final qte = int.tryParse(val);
-                if (qte == null || qte <= 0) {
-                  return "Quantité invalide";
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 12),
-
-            TextFormField(
-              controller: prixController,
-              decoration: const InputDecoration(
-                labelText: "Prix unitaire (Ar)",
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.number,
-              validator: (val) {
-                if (val == null || val.trim().isEmpty) {
-                  return "Entrez le prix unitaire";
-                }
-                final prix = int.tryParse(val);
-                if (prix == null || prix <= 0) {
-                  return "Prix invalide";
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 20),
-
-            ElevatedButton(
-              onPressed: _valider,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.teal.shade700,
-                minimumSize: const Size.fromHeight(46),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              child: const Text(
-                "Ajouter la vente",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-            ),
-            const SizedBox(height: 24),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Utilitaire CSV (simple)
-class ListToCsvConverter {
-  const ListToCsvConverter();
-
-  String convert(List<List<String>> data) {
-    return data.map((row) {
-      return row.map((item) {
-        final escaped = item.replaceAll('"', '""');
-        if (escaped.contains(',') || escaped.contains('"') || escaped.contains('\n')) {
-          return '"$escaped"';
-        }
-        return escaped;
-      }).join(',');
-    }).join('\n');
   }
 }
