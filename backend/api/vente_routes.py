@@ -1,6 +1,6 @@
 from flask import request, jsonify
 from . import vente_bp
-from models import db, Vente 
+from models import db, Vente  ,Produit
 from datetime import datetime
 
 @vente_bp.route('/', methods=['GET'])
@@ -27,29 +27,29 @@ def delete_vente(idvente):
     db.session.delete(vente)
     db.session.commit()
 
-    return jsonify({'message': f'Vente {idvente} supprimée avec succès.'})
+    return jsonify({'message': f'Vente  supprimée(s) avec succès.'})
 
 
 @vente_bp.route('/', methods=['POST'])
 def add_vente():
-    data = request.json
-    try:
-        nouvelle_vente = Vente(
-            idproduit=data['idproduit'],
-            date=data['date'],   # chaîne 'YYYY-MM-DD'
-            qte=data['qte'],
-            prix=data['prix']
-        )
-        db.session.add(nouvelle_vente)
-        db.session.commit()
-        return jsonify({
-            'message': 'Vente créée',
-            'idvente': nouvelle_vente
-        }), 201
-    except KeyError as e:
-        return jsonify({'error': f'Champ manquant : {str(e)}'}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    data = request.get_json()
+    idproduit=data['idproduit']
+    qte=data['qte']
+    new_vente = Vente(
+        idproduit=data['idproduit'],
+        qte=data['qte'],
+        prix=data['prix'],
+        date=datetime.utcnow()
+    )
+    p = Produit.query.get(idproduit)
+    p.qte = p.qte - qte
+    nouveau_qte=p.qte
+    
+    if nouveau_qte < 0  :
+        return  jsonify({"error": "Quantité du produit est negative"}), 400
+    db.session.add(new_vente)
+    db.session.commit()
+    return jsonify({"message": "Vente ajoutée avec succès"}), 200
 
 
 @vente_bp.route('/filter', methods=['GET'])
@@ -63,7 +63,10 @@ def filter_ventes_by_date():
     except ValueError:
         return jsonify({'error': 'Format de date invalide, attendu YYYY-MM-DD'}), 400
 
-    ventes = Vente.query.filter(Vente.date >= date_obj).order_by(Vente.date.asc()).all()
+    # Trier par date décroissante pour avoir le dernier ajout en premier
+    ventes = Vente.query.filter(
+        db.func.date(Vente.date) == date_obj
+    ).order_by(Vente.idvente.desc()).all()
 
     result = []
     for v in ventes:
@@ -98,7 +101,7 @@ def filter_ventes_by_date_range():
     ventes = Vente.query.filter(
         Vente.date >= start_date,
         Vente.date <= end_date
-    ).order_by(Vente.date.asc()).all()
+    ).order_by(Vente.idvente.desc()).all()
 
     result = []
     for v in ventes:

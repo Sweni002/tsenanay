@@ -1,18 +1,25 @@
 from flask import request, jsonify
 from . import produit_bp
-from models import db, Produit
+from models import db, Produit , ProduitStock
+from sockets import socketio  # importer l’instance
 
 @produit_bp.route('/', methods=['GET'])
 def get_produits():
-    produits = Produit.query.all()
+    produits = Produit.query.order_by(Produit.nom.asc()).all()
+    
+    socketio.emit("produit_ajoute", {
+        "id": produits.id,
+        "nom": produits.nom,
+        "qte": produits.qte
+    })
+
     result = []
     for p in produits:
         result.append({
             'idproduit': p.idproduit,
             'nom': p.nom,
             'qte': p.qte,
-            # Convertir en int pour éviter la virgule
-            'prix': int(p.prix),
+              'prix': int(p.prix),
             'benefice': int(p.benefice)
         })
     return jsonify(result)
@@ -26,7 +33,7 @@ def delete_produit(idproduit):
     db.session.delete(p)
     db.session.commit()
 
-    return jsonify({'message': f'Produit {idproduit} supprimé avec succès.'})
+    return jsonify({'message': f'Produit  supprimée(s) avec succès.'})
 
 @produit_bp.route('/', methods=['POST'])
 def add_produit():
@@ -43,8 +50,25 @@ def add_produit():
     if benefice > prix:
         return jsonify({'error': 'Le bénéfice ne peut pas être supérieur au prix'}), 400
 
-    p = Produit(nom=data['nom'], qte=data['qte'], prix=prix, benefice=benefice)
+    # Création du produit
+    p = Produit(
+        nom=data['nom'], 
+        qte=data['qte'], 
+        prix=prix, 
+        benefice=benefice
+    )
     db.session.add(p)
+    db.session.flush()  # ⚡ Pour obtenir l'ID avant commit
+
+    # Ajouter un mouvement initial dans ProduitStock
+    if p.qte > 0:
+        mouvement = ProduitStock(
+            idproduit=p.idproduit,
+            qte=p.qte,
+            type_mouvement="approvisionnement"
+        )
+        db.session.add(mouvement)
+
     db.session.commit()
 
     return jsonify({
@@ -84,13 +108,25 @@ def update_produit(idproduit):
     if nouveau_benefice > nouveau_prix:
         return jsonify({'error': 'Le bénéfice ne peut pas être supérieur au prix'}), 400
 
-    # Mise à jour des champs si présents
+    # Vérifier si la quantité change
+    qte_avant = p.qte
+    qte_nouvelle = data.get('qte', p.qte)
+
+    # Mise à jour des champs
     if 'nom' in data:
         p.nom = data['nom']
-    if 'qte' in data:
-        p.qte = data['qte']
+    p.qte = qte_nouvelle
     p.prix = nouveau_prix
     p.benefice = nouveau_benefice
+
+    # ⚡ Ajouter dans ProduitStock si quantité modifiée
+    if qte_nouvelle != qte_avant:
+        mouvement = ProduitStock(
+            idproduit=p.idproduit,
+            qte=qte_nouvelle - qte_avant,
+            type_mouvement="mise à jour"
+        )
+        db.session.add(mouvement)
 
     db.session.commit()
 
@@ -101,7 +137,6 @@ def update_produit(idproduit):
         'prix': p.prix,
         'benefice': p.benefice
     })
-
 
 @produit_bp.route('/approvisionner/<int:idproduit>', methods=['POST'])
 def approvisionner_produit(idproduit):
@@ -120,12 +155,21 @@ def approvisionner_produit(idproduit):
     except ValueError:
         return jsonify({'error': 'Quantité invalide, doit être un entier'}), 400
 
-    # Ajout de la quantité
+    # Ajout de la quantité au produit
     p.qte += qte_ajoutee
+
+    # ⚡ Ajouter un mouvement dans ProduitStock
+    mouvement = ProduitStock(
+        idproduit=p.idproduit,
+        qte=qte_ajoutee,
+        type_mouvement="approvisionnement"
+    )
+    db.session.add(mouvement)
+
     db.session.commit()
 
     return jsonify({
-        'message': f'Produit {idproduit} approvisionné avec succès.',
+        'message': f'Produit {p.nom} approvisionné avec succès.',
         'idproduit': p.idproduit,
         'nouvelle_qte': p.qte
     })

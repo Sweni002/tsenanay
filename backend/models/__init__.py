@@ -4,3 +4,4 @@ db = SQLAlchemy()
 
 from .produit import Produit
 from .vente import Vente
+from .stocks import ProduitStock

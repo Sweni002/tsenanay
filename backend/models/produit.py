@@ -8,4 +8,15 @@ class Produit(db.Model):
     prix = db.Column(db.Double, nullable=False)
     benefice = db.Column(db.Double, nullable=True)
 
-    ventes = db.relationship("Vente", back_populates="produit")
+    ventes = db.relationship(
+    "Vente",
+    back_populates="produit",
+    passive_deletes=True
+)
+
+    stocks = db.relationship(
+        "ProduitStock",
+        back_populates="produit",
+        cascade="all, delete-orphan"  # ⚡ supprime automatiquement les stocks liés
+    )
+
